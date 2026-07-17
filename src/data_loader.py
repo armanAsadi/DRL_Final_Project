@@ -47,10 +47,6 @@ class DataLoader:
 
         df = pd.concat(frames, ignore_index=True)
 
-        df = df.sort_values(["Ticker", "Date"]).reset_index(drop=True)
-
-        df.columns.name = None
-
         return df
 
     def save_data(self, data: pd.DataFrame) -> None:
