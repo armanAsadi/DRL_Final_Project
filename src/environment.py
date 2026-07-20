@@ -16,9 +16,22 @@ class PortfolioEnv(gym.Env):
         self,
         dataset: pd.DataFrame,
         portfolio: str,
+        price_data: pd.DataFrame | None = None,
     ):
         """
         Initialize the portfolio environment.
+
+        Parameters
+        ----------
+        dataset:
+            Observation data. It may contain normalized features and prices.
+        portfolio:
+            The portfolio/risk group to trade.
+        price_data:
+            Optional unscaled market data with the raw ``Close Prices`` column.
+            When ``dataset`` is normalized, this argument is required to compute
+            economically meaningful returns and portfolio values. It must be
+            aligned with ``dataset`` by portfolio and date.
         """
 
         super().__init__()
@@ -36,6 +49,21 @@ class PortfolioEnv(gym.Env):
             .copy()
             .reset_index(drop=True)
         )
+
+        if self.data.empty:
+            raise ValueError(f"No observations found for portfolio '{portfolio}'.")
+
+        price_source = dataset if price_data is None else price_data
+
+        self.price_data = (
+            price_source[
+                price_source["Portfolio"] == portfolio
+            ]
+            .copy()
+            .reset_index(drop=True)
+        )
+
+        self._validate_price_data(price_data_provided=price_data is not None)
 
         self.current_step = 0
 
@@ -257,12 +285,16 @@ class PortfolioEnv(gym.Env):
     
     def _calculate_asset_returns(self):
         """
-        Calculate daily returns for all assets.
+        Calculate daily returns from unscaled close prices.
+
+        ``self.data`` may be normalized and is used only for observations.
+        ``self.price_data`` always supplies the market prices used by the
+        portfolio accounting logic.
         """
 
-        current = self._get_current_row()
+        current = self.price_data.iloc[self.current_step]
 
-        next_row = self.data.iloc[
+        next_row = self.price_data.iloc[
             self.current_step + 1
         ]
 
@@ -315,3 +347,39 @@ class PortfolioEnv(gym.Env):
 
     def _get_current_row(self):
         return self.data.iloc[self.current_step]
+
+    def _validate_price_data(
+        self,
+        price_data_provided: bool,
+    ) -> None:
+        """Ensure raw price data is aligned with the observation data."""
+
+        if len(self.price_data) != len(self.data):
+            raise ValueError(
+                "price_data must contain one row per observation for the selected portfolio."
+            )
+
+        observation_dates = pd.to_datetime(self.data["Date"]).reset_index(drop=True)
+        price_dates = pd.to_datetime(self.price_data["Date"]).reset_index(drop=True)
+
+        if not observation_dates.equals(price_dates):
+            raise ValueError(
+                "dataset and price_data must have identical, date-aligned rows."
+            )
+
+        observation_assets = len(self.data.iloc[0]["Close Prices"])
+        price_arrays = self.price_data["Close Prices"].to_numpy()
+
+        if any(len(prices) != observation_assets for prices in price_arrays):
+            raise ValueError(
+                "Each price_data row must contain the same number of assets as dataset."
+            )
+
+        raw_prices = np.vstack(price_arrays)
+
+        if not np.isfinite(raw_prices).all() or np.any(raw_prices <= 0):
+            source = "price_data" if price_data_provided else "dataset"
+            raise ValueError(
+                f"{source} must contain finite, strictly positive raw Close Prices. "
+                "Pass the unscaled dataset through price_data when observations are normalized."
+            )
