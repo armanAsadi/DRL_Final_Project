@@ -4,6 +4,11 @@ import pandas as pd
 
 from gymnasium import spaces
 
+try:  # Supports both ``src.environment`` and legacy notebook imports.
+    from .config import INITIAL_CAPITAL, TRANSACTION_COST
+except ImportError:  # pragma: no cover - used only when src/ is on sys.path
+    from config import INITIAL_CAPITAL, TRANSACTION_COST
+
 
 class PortfolioEnv(gym.Env):
     """
@@ -17,6 +22,8 @@ class PortfolioEnv(gym.Env):
         dataset: pd.DataFrame,
         portfolio: str,
         price_data: pd.DataFrame | None = None,
+        initial_capital: float = INITIAL_CAPITAL,
+        transaction_cost_rate: float = TRANSACTION_COST,
     ):
         """
         Initialize the portfolio environment.
@@ -32,13 +39,23 @@ class PortfolioEnv(gym.Env):
             When ``dataset`` is normalized, this argument is required to compute
             economically meaningful returns and portfolio values. It must be
             aligned with ``dataset`` by portfolio and date.
+        initial_capital:
+            Starting portfolio value used for the capital history.
+        transaction_cost_rate:
+            Cost charged per unit of turnover.
         """
 
         super().__init__()
 
         self.portfolio = portfolio
 
-        self.portfolio_value = 1.0
+        if initial_capital <= 0:
+            raise ValueError("initial_capital must be positive.")
+        if transaction_cost_rate < 0:
+            raise ValueError("transaction_cost_rate cannot be negative.")
+
+        self.initial_capital = float(initial_capital)
+        self.portfolio_value = self.initial_capital
 
         self.portfolio_history = []
 
@@ -71,7 +88,7 @@ class PortfolioEnv(gym.Env):
             self.data.iloc[0]["Close Prices"]
         )
 
-        self.transaction_cost_rate = 0.0005
+        self.transaction_cost_rate = float(transaction_cost_rate)
 
         self.previous_weights = np.zeros(
             self.n_assets,
@@ -106,9 +123,9 @@ class PortfolioEnv(gym.Env):
 
         self.current_step = 0
 
-        self.portfolio_value = 1.0
+        self.portfolio_value = self.initial_capital
 
-        self.portfolio_history = [1.0]
+        self.portfolio_history = [self.initial_capital]
 
         self.previous_weights = np.zeros(
             self.n_assets,

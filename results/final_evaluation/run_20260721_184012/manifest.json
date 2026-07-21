@@ -1,0 +1,15 @@
+{
+  "device": "cpu",
+  "n_trials": 10,
+  "timesteps_per_trial": 100000,
+  "validation_days": 252,
+  "benchmark_portfolio": "Moderate",
+  "strategies": [
+    "PPO Conservative",
+    "PPO Moderate",
+    "PPO Aggressive",
+    "MVO",
+    "DJI",
+    "Equal Weight"
+  ]
+}

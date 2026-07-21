@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import torch
+
 # =============================================================================
 # Project Paths
 # =============================================================================
@@ -30,8 +32,17 @@ TEST_END = "2024-12-31"
 # Portfolio Configuration
 # =============================================================================
 
-INITIAL_CAPITAL = 1_000_000
+INITIAL_CAPITAL = 1.0   # In million dollars scale
 TRANSACTION_COST = 0.0005
+
+# PPO uses this device for the policy and neural feature extractor. The
+# environment itself remains CPU-based, as required by Gymnasium/SB3.
+TRAINING_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def get_training_device() -> torch.device:
+    """Return the project training device (CUDA when available)."""
+    return torch.device(TRAINING_DEVICE)
 
 # =============================================================================
 # Dow Jones 30 Tickers
