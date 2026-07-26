@@ -8,8 +8,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from garch import GARCHModel
 import matplotlib.pyplot as plt
 import pandas as pd
+from portfolio_builder import PortfolioBuilder
 
 from src.benchmarks import DJIIndexStrategy, EqualWeightStrategy, MVOStrategy
 from src.config import PROCESSED_DATA_DIR, RESULTS_DIR, TEST_END, TEST_START, TRAIN_END, TRAINING_DEVICE
@@ -18,6 +20,7 @@ from src.evaluator import Evaluator
 from src.feature_engineering import FeatureEngineer
 from src.feature_scaler import FeatureScaler
 from src.metrics import annual_return, annual_volatility, cumulative_return, maximum_drawdown, sharpe_ratio
+from src.training.trainer import PPOTrainer
 from src.training.tuner import PPOHyperparameterTuner
 from src.utils import plot_cumulative_returns, plot_learning_curve, plot_portfolio_weights
 
@@ -34,19 +37,30 @@ def _split_by_date(data: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
 def prepare_experiment_data() -> dict[str, pd.DataFrame]:
     """Build raw/scaled train and test states without fitting on test data."""
     market_path = PROCESSED_DATA_DIR / "dow30_processed.csv"
-    portfolios_path = PROCESSED_DATA_DIR / "portfolios.csv"
-    if not market_path.exists() or not portfolios_path.exists():
+    if not market_path.exists():
         raise FileNotFoundError("Run preprocessing, GARCH, and portfolio construction first.")
 
-    LOGGER.info("Loading processed market data and portfolio assignments")
+    LOGGER.info("Loading processed market data and process them...")
+    
     market_data = pd.read_csv(market_path, parse_dates=["Date"])
-    assignments = pd.read_csv(portfolios_path)
+    
+    garch = GARCHModel(n_jobs=5)
+    volatility = garch.estimate_all(data=market_data)
+        
+    builder = PortfolioBuilder()
+    classified_market_data = builder.build_portfolios(market_data=market_data, volatility=volatility)
+    
+    LOGGER.info("Converting raw market data to states.")
     engineer = FeatureEngineer(lookback=252)
-    raw_states = engineer.build_state_dataset(engineer.add_technical_indicators(market_data), assignments)
+    data_with_indicators = engineer.add_technical_indicators(classified_market_data)
+    data_with_indicators = data_with_indicators.groupby("Date").filter(lambda x: len(x) == 30)
+    raw_states = engineer.build_state_dataset(data_with_indicators)
     train_raw = _split_by_date(raw_states, "1900-01-01", TRAIN_END)
     test_raw = _split_by_date(raw_states, TEST_START, TEST_END)
     if train_raw.empty or test_raw.empty:
         raise ValueError("Could not construct both train and 2023–2024 test state datasets.")
+    
+    raw_states.to_csv('./raw_states.csv')
 
     LOGGER.info("Fitting feature scaler on %s training states only", len(train_raw))
     scaler = FeatureScaler()
@@ -167,8 +181,8 @@ def run_project_pipeline(
     *,
     portfolios: tuple[str, ...] = PORTFOLIOS,
     benchmark_portfolio: str = "Moderate",
-    total_timesteps: int = 100_000,
-    n_trials: int = 10,
+    total_timesteps: int = 10_000,
+    n_trials: int = 20,
     validation_days: int = 252,
     device: str = TRAINING_DEVICE,
     results_parent: Path = RESULTS_DIR / "final_evaluation",
@@ -196,6 +210,9 @@ def run_project_pipeline(
     tuning_scaler.fit(tuning_train_raw)
     tuning_train_scaled = tuning_scaler.transform(tuning_train_raw)
     validation_scaled = tuning_scaler.transform(validation_raw)
+    
+    tuning_train_raw.to_csv('./train_data.csv')
+    tuning_train_scaled.to_csv('./train_data_scaled.csv')
 
     models, best_params, optimization_histories, learning_histories, evaluations = {}, {}, {}, {}, {}
     for portfolio in portfolios:
@@ -214,7 +231,16 @@ def run_project_pipeline(
             n_trials=n_trials,
             device=device,
         )
-        model = tuner.optimize()
+        _ = tuner.optimize()
+        
+        trainer = PPOTrainer(
+            environment=train_factory(),
+            hyperparameters=tuner.best_params,
+            device=TRAINING_DEVICE,
+        )
+        
+        model = trainer.train(total_timesteps=total_timesteps)
+        
         models[strategy_name] = model
         best_params[strategy_name] = tuner.best_params or {}
         optimization_histories[strategy_name] = tuner.optimization_history

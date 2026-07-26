@@ -1,32 +1,46 @@
+from __future__ import annotations
+
+from concurrent.futures import ProcessPoolExecutor
+
 import numpy as np
 import pandas as pd
-
 from arch import arch_model
+from arch.univariate.base import ARCHModelResult
 
 from src.config import PROCESSED_DATA_DIR
 
 
 class GARCHModel:
     """
-    Estimate GARCH(1,1) volatility for one or multiple assets.
+    Rolling GARCH(1,1) volatility forecasting.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        window: int = 252,
+        refit_every: int = 5,
+        n_jobs: int = -1,
+    ):
 
-        self.model = None
-        self.result = None
+        self.window = window
+        self.refit_every = refit_every
+        self.n_jobs = n_jobs
 
-        self.output_file = PROCESSED_DATA_DIR / "volatility.csv"
+        self.output_file = (
+            PROCESSED_DATA_DIR /
+            "volatility.csv"
+        )
 
-    def fit(self, returns: pd.Series):
+    def _fit(
+        self,
+        returns: pd.Series,
+    ) -> ARCHModelResult:
         """
         Fit a zero-mean GARCH(1,1) model.
         """
 
-        returns = returns.dropna()
-
-        self.model = arch_model(
-            returns,
+        model = arch_model(
+            returns.dropna(),
             mean="Zero",
             vol="GARCH",
             p=1,
@@ -35,91 +49,174 @@ class GARCHModel:
             rescale=True,
         )
 
-        self.result = self.model.fit(
+        result = model.fit(
             disp="off",
             update_freq=0,
+            show_warning=False
         )
 
-        return self.result
+        return result
 
-    def forecast(self) -> float:
+    def _forecast(
+        self,
+        result: ARCHModelResult,
+    ) -> float:
         """
-        Forecast one-step-ahead conditional volatility.
+        Forecast one-step-ahead volatility.
         """
 
-        if self.result is None:
-            raise ValueError("Model has not been fitted.")
+        forecast = result.forecast(
+            horizon=1,
+            reindex=False,
+        )
 
-        forecast = self.result.forecast(horizon=1)
-
-        variance = forecast.variance.iloc[-1, 0]
+        variance = (
+            forecast
+            .variance
+            .iloc[-1, 0]
+        )
 
         volatility = np.sqrt(
-            variance / (self.result.scale ** 2)
+            variance /
+            (result.scale ** 2)
         )
 
         return float(volatility)
 
-    def get_parameters(self) -> dict:
+    def _estimate_single_ticker(
+        self,
+        ticker_data: pd.DataFrame,
+    ) -> pd.DataFrame:
         """
-        Return fitted GARCH parameters.
+        Rolling volatility estimation for one ticker.
         """
 
-        if self.result is None:
-            raise ValueError("Model has not been fitted.")
+        df = (
+            ticker_data
+            .sort_values("Date")
+            .reset_index(drop=True)
+            .copy()
+        )
 
-        params = self.result.params
+        returns = df["Log Return"]
 
-        omega = float(params["omega"])
-        alpha = float(params["alpha[1]"])
-        beta = float(params["beta[1]"])
+        forecast_volatility = np.full(
+            len(df),
+            np.nan,
+            dtype=np.float32,
+        )
 
-        return {
-            "Omega": omega,
-            "Alpha": alpha,
-            "Beta": beta,
-            "Persistence": alpha + beta,
-        }
+        result = None
+
+        for current in range(len(df)):
+
+            start = max(
+                0,
+                current - self.window,
+            )
+
+            train = (
+                returns
+                .iloc[start:current]
+                .dropna()
+            )
+
+            if len(train) < 30:
+                continue
+
+            if (
+                result is None or
+                (current - 1) % self.refit_every == 0
+            ):
+                result = self._fit(train)
+
+            forecast_volatility[current] = (
+                self._forecast(result)
+            )
+
+        df["Forecast Volatility"] = (
+            forecast_volatility
+        )
+        
+        ticker = ticker_data["Ticker"].unique()[0]
+        print(f'Forecast daily volatility completed for ticker: {ticker}')
+        
+        return (
+            df
+            .dropna(
+                subset=[
+                    "Forecast Volatility"
+                ]
+            )
+            .reset_index(drop=True)
+        )
 
     def estimate_all(
         self,
         data: pd.DataFrame,
     ) -> pd.DataFrame:
         """
-        Estimate GARCH volatility for every stock.
+        Estimate rolling volatility for every ticker.
         """
 
-        results = []
+        groups = [
+            group.copy()
+            for _,
+            group
+            in data.groupby(
+                "Ticker",
+                sort=True,
+            )
+        ]
 
-        for ticker in sorted(data["Ticker"].unique()):
+        if self.n_jobs == 1:
 
-            returns = data.loc[
-                data["Ticker"] == ticker,
-                "Log Return",
+            results = [
+                self._estimate_single_ticker(
+                    group
+                )
+                for group in groups
             ]
 
-            self.fit(returns)
+        else:
 
-            params = self.get_parameters()
-
-            results.append(
-                {
-                    "Ticker": ticker,
-                    **params,
-                    "Forecast Volatility": self.forecast(),
-                }
+            workers = (
+                None
+                if self.n_jobs == -1
+                else self.n_jobs
             )
 
-        results = pd.DataFrame(results)
+            with ProcessPoolExecutor(
+                max_workers=workers
+            ) as executor:
 
-        return results
+                results = list(
+                    executor.map(
+                        self._estimate_single_ticker,
+                        groups,
+                    )
+                )
+
+        return (
+            pd.concat(
+                results,
+                ignore_index=True,
+            )
+            .sort_values(
+                [
+                    "Date",
+                    "Ticker",
+                ]
+            )
+            .reset_index(drop=True)
+        )
 
     def save_results(
         self,
         results: pd.DataFrame,
     ) -> None:
         """
-        Save estimated volatilities.
+        Save volatility forecasts.
         """
 
         results.to_csv(
@@ -127,9 +224,13 @@ class GARCHModel:
             index=False,
         )
 
-    def load_results(self) -> pd.DataFrame:
+    def load_results(
+        self,
+    ) -> pd.DataFrame:
         """
-        Load estimated volatilities.
+        Load volatility forecasts.
         """
 
-        return pd.read_csv(self.output_file)
+        return pd.read_csv(
+            self.output_file
+        )

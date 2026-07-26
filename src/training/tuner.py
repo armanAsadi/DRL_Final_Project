@@ -113,7 +113,7 @@ class PPOHyperparameterTuner:
                 device=self.device,
                 seed=self.seed + trial_number,
             )
-            model = trainer.learn(self.total_timesteps)
+            model = trainer.train(self.total_timesteps)
             results = Evaluator(model, self.evaluation_env_factory()).evaluate()
             score = sharpe_ratio(results)
             score = -np.inf if not np.isfinite(score) else score
