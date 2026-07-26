@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from garch import GARCHModel
+from src.garch import GARCHModel
 import matplotlib.pyplot as plt
 import pandas as pd
 from portfolio_builder import PortfolioBuilder
