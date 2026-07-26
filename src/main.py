@@ -8,11 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.garch import GARCHModel
 import matplotlib.pyplot as plt
 import pandas as pd
-from portfolio_builder import PortfolioBuilder
 
+from src.garch import GARCHModel
+from src.portfolio_builder import PortfolioBuilder
 from src.benchmarks import DJIIndexStrategy, EqualWeightStrategy, MVOStrategy
 from src.config import PROCESSED_DATA_DIR, RESULTS_DIR, TEST_END, TEST_START, TRAIN_END, TRAINING_DEVICE
 from src.environment import PortfolioEnv
