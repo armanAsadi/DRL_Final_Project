@@ -37,7 +37,7 @@ class PPOTrainer:
         self.history = TrainingHistoryCallback().to_frame()
         self.model: PPO | None = None
 
-    def learn(self, total_timesteps: int) -> PPO:
+    def train(self, total_timesteps: int) -> PPO:
         """Train and return a PPO model, exposing optimizer losses in ``history``."""
         if total_timesteps <= 0:
             raise ValueError("total_timesteps must be positive.")
@@ -76,7 +76,3 @@ class PPOTrainer:
             self.model.num_timesteps,
         )
         return self.model
-
-    def train(self, total_timesteps: int) -> PPO:
-        """Backward-compatible alias for :meth:`learn`."""
-        return self.learn(total_timesteps)

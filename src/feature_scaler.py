@@ -47,12 +47,6 @@ class FeatureScaler:
 
             self.scalers[feature].fit(values)
 
-        covariance = self._stack_covariance(dataset)
-
-        self.scalers["covariance"].fit(
-            covariance
-        )
-
     def transform(
         self,
         dataset: pd.DataFrame,
@@ -75,23 +69,6 @@ class FeatureScaler:
             ].transform(values)
 
             dataset[column] = list(values)
-
-        covariance = self._stack_covariance(
-            dataset
-        )
-
-        covariance = self.scalers[
-            "covariance"
-        ].transform(covariance)
-
-        n_assets = dataset["Covariance Matrix"].iloc[0].shape[0]
-
-        dataset["Covariance Matrix"] = (
-            self._restore_covariance(
-                covariance,
-                n_assets
-            )
-        )
 
         dataset["RSI"] = dataset["RSI"].apply(
             lambda x: x / 100.0
@@ -145,40 +122,4 @@ class FeatureScaler:
 
         return np.vstack(
             dataset[column].to_numpy()
-        )
-
-    def _stack_covariance(
-        self,
-        dataset: pd.DataFrame,
-    ) -> np.ndarray:
-        """
-        Stack covariance matrices into a 2D array.
-        """
-
-        covariance = np.stack(
-            dataset[
-                "Covariance Matrix"
-            ].to_numpy()
-        )
-
-        return covariance.reshape(
-            len(covariance),
-            -1,
-        )
-
-    def _restore_covariance(
-        self,
-        covariance: np.ndarray,
-        n_assets: int
-    ):
-        """
-        Restore covariance matrices to their original shape.
-        """
-
-        return list(
-            covariance.reshape(
-                -1,
-                n_assets,
-                n_assets,
-            )
         )

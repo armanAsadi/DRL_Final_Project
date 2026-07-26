@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "drlproject"
+name = "src"
 version = "0.1.0"
 description = "Deep Reinforcement Learning Project"
 readme = "README.md"

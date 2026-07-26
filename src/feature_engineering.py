@@ -3,12 +3,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from datetime import datetime, timedelta
+
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
 from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 
 from src.config import PROCESSED_DATA_DIR
+
 
 
 class FeatureEngineer:
@@ -75,6 +78,17 @@ class FeatureEngineer:
             )
 
             df["OBV"] = obv.on_balance_volume()
+            
+            # Remove rows where at least one indicator is unavailable
+            df = df.dropna(
+                subset=[
+                    "MACD",
+                    "RSI",
+                    "BB",
+                    "ATR",
+                    "OBV",
+                ]
+            )
 
             frames.append(df)
 
@@ -87,54 +101,33 @@ class FeatureEngineer:
         return data
     
     def compute_covariance(
-    self,
-    data: pd.DataFrame,
-    tickers: list[str],
-    ):
+        self,
+        data: pd.DataFrame,
+        tickers: list[str],
+    ) -> np.ndarray:
         """
-        Compute rolling covariance matrices.
+        Compute covariance matrix using daily log returns.
+        Returns covariance matrix in the same order as tickers list.
         """
-
-        df = (
-            data[data["Ticker"].isin(tickers)]
-            .copy()
-            .sort_values(["Date", "Ticker"])
-        )
-
-        price = df.pivot(
-            index="Date",
-            columns="Ticker",
-            values="Close",
-        )
-
-        returns = price.pct_change()
-
-        covariance = {}
-
-        for i in range(
-            self.lookback,
-            len(returns),
-        ):
-
-            cov = (
-                returns.iloc[
-                    i - self.lookback:i
-                ]
-                .dropna()
-                .cov()
-                .values
-            )
-
-            covariance[
-                returns.index[i]
-            ] = cov
-
-        return covariance
+        # Filter and pivot
+        filtered_data = data[data["Ticker"].isin(tickers)]
+        stock_data = filtered_data.pivot(
+            index="Date", 
+            columns="Ticker", 
+            values="Log Return"
+        ).dropna()
+        
+        # Ensure columns are in the specified order
+        stock_data = stock_data[tickers]  # Reorder columns
+        
+        # Get covariance matrix as numpy array
+        covariance_matrix = stock_data.cov().values
+        
+        return covariance_matrix
     
     def build_state_dataset(
-    self,
-    data: pd.DataFrame,
-    portfolio_df: pd.DataFrame,
+        self,
+        data: pd.DataFrame,
     ) -> pd.DataFrame:
         """
         Build the environment dataset.
@@ -142,66 +135,113 @@ class FeatureEngineer:
 
         rows = []
 
-        for portfolio in [
+        data = (
+            data
+            .copy()
+            .sort_values(
+                [
+                    "Date",
+                    "Risk Level",
+                    "Ticker",
+                ]
+            )
+        )
+
+        portfolios = (
             "Conservative",
             "Moderate",
             "Aggressive",
-        ]:
+        )
 
-            tickers = portfolio_df.loc[
-                portfolio_df["Risk Level"] == portfolio,
-                "Ticker",
-            ].tolist()
+        dates = (
+            data["Date"]
+            .drop_duplicates()
+            .sort_values()
+        )
 
-            covariance = self.compute_covariance(
-                data,
-                tickers,
-            )
+        for date in dates:
 
-            portfolio_data = (
-                data[data["Ticker"].isin(tickers)]
-                .copy()
-            )
+            start_date =  date - timedelta(days=self.lookback)
+            window = data[
+                (data["Date"] <= date)
+                &
+                (data["Date"] >= start_date)
+            ].copy().sort_values("Ticker")
 
-            for date, cov in covariance.items():
+            for portfolio in portfolios:
 
                 daily = (
-                    portfolio_data[
-                        portfolio_data["Date"] == date
+                    data[
+                        (data["Date"] == date)
+                        &
+                        (data["Risk Level"] == portfolio)
                     ]
+                    .copy()
                     .sort_values("Ticker")
                 )
 
+                if len(daily) != 10:
+                    continue
+
+                tickers = sorted(daily["Ticker"])
+
+                covariance = self.compute_covariance(
+                    window,
+                    tickers
+                )
+                
+                # if np.any(np.isnan(covariance)):
+                #     continue
+                
+                covariance = np.nan_to_num(covariance, nan=0.0)
+
+                print(f'State created for date: {date}')
+                
                 rows.append(
                     {
                         "Date": date,
+
                         "Portfolio": portfolio,
-                        "Close Prices": daily[
-                            "Close"
-                        ].to_numpy(),
 
-                        "Covariance Matrix": cov,
+                        "Close Prices":
+                            daily["Close"]
+                            .to_numpy(np.float32),
 
-                        "MACD": daily["MACD"].to_numpy(),
+                        "Covariance Matrix":
+                            covariance,
 
-                        "RSI": daily["RSI"].to_numpy(),
+                        "MACD":
+                            daily["MACD"]
+                            .to_numpy(np.float32),
 
-                        "BB": daily["BB"].to_numpy(),
+                        "RSI":
+                            daily["RSI"]
+                            .to_numpy(np.float32),
 
-                        "ATR": daily["ATR"].to_numpy(),
+                        "BB":
+                            daily["BB"]
+                            .to_numpy(np.float32),
 
-                        "OBV": daily["OBV"].to_numpy(),
+                        "ATR":
+                            daily["ATR"]
+                            .to_numpy(np.float32),
+
+                        "OBV":
+                            daily["OBV"]
+                            .to_numpy(np.float32),
                     }
                 )
 
-        dataset = pd.DataFrame(rows)
-
-        dataset = dataset.sort_values(
-            [
-                "Portfolio",
-                "Date",
-            ]
-        ).reset_index(drop=True)
+        dataset = (
+            pd.DataFrame(rows)
+            .sort_values(
+                [
+                    "Portfolio",
+                    "Date",
+                ]
+            )
+            .reset_index(drop=True)
+        )
 
         return dataset
     
